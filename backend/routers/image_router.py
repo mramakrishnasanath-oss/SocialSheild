@@ -7,6 +7,7 @@ from datetime import datetime
 from ml.models import model_registry
 from utils.auth import get_current_user
 from models.scan_result import ScanResult, MediaType, VerdictLevel
+from utils.huggingface import scan_image_with_hf
 import io
 
 router = APIRouter()
@@ -21,10 +22,19 @@ async def scan_image(file: UploadFile = File(...), user_id: str = Depends(get_cu
     if len(contents) > 20 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Image too large (max 20MB)")
     
-    # Mock analysis logic based on file size hash to make it deterministic-ish
-    seed = len(contents) % 100
-    fake_prob = min(0.99, max(0.01, seed / 100.0))
-    real_prob = 1.0 - fake_prob
+    # Try Hugging Face Inference API First
+    hf_result = await scan_image_with_hf(contents)
+    
+    if hf_result is not None:
+        fake_prob = hf_result.get("fake_prob", 0.5)
+        real_prob = hf_result.get("real_prob", 0.5)
+        meta_info = "Analyzed via HuggingFace Inference API (Real Deepfake Model)"
+    else:
+        # Fallback to Mock analysis logic based on file size hash to make it deterministic-ish
+        seed = len(contents) % 100
+        fake_prob = min(0.99, max(0.01, seed / 100.0))
+        real_prob = 1.0 - fake_prob
+        meta_info = "Mocked for Free Tier (HF API Failed/Missing Key)"
     
     if fake_prob >= 0.75:
         verdict = VerdictLevel.FAKE
@@ -50,7 +60,7 @@ async def scan_image(file: UploadFile = File(...), user_id: str = Depends(get_cu
         risk_level=risk,
         explanations=explanations,
         heatmap_base64=None,
-        metadata={"info": "Mocked for Free Tier"},
+        metadata={"info": meta_info},
         timestamp=datetime.utcnow().isoformat()
     )
     
