@@ -1,16 +1,15 @@
 """
 Text Scam Detection Router
-Uses DistilBERT for phishing/fraud intent classification
+Uses Regex patterns and HuggingFace API (optional) for phishing/fraud intent classification
 """
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-import torch
-import torch.nn.functional as F
-from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
 import re
 import uuid
 import logging
 from datetime import datetime
+import os
+import httpx
 
 from utils.auth import get_current_user
 from models.scan_result import ScanResult, MediaType, VerdictLevel
@@ -18,22 +17,7 @@ from models.scan_result import ScanResult, MediaType, VerdictLevel
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# Load HuggingFace pipeline for text classification
-_text_classifier = None
-
-def get_text_classifier():
-    global _text_classifier
-    if _text_classifier is None:
-        try:
-            _text_classifier = pipeline(
-                "text-classification",
-                model="mrm8488/bert-tiny-finetuned-sms-spam-detection",
-                device=-1  # CPU
-            )
-        except Exception as e:
-            logger.error(f"Failed to load text classifier: {e}")
-    return _text_classifier
-
+HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "")
 
 # Regex patterns for rule-based scam detection
 PHISHING_PATTERNS = [
@@ -53,6 +37,34 @@ class TextScanRequest(BaseModel):
     text: str
 
 
+async def get_text_ml_score(text: str) -> float:
+    """Uses Hugging Face Inference API to get ML spam score if key is available"""
+    if not HF_API_KEY:
+        return 0.5
+        
+    API_URL = "https://api-inference.huggingface.co/models/mrm8488/bert-tiny-finetuned-sms-spam-detection"
+    headers = {"Authorization": f"Bearer {HF_API_KEY}"}
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(API_URL, headers=headers, json={"inputs": text[:512]})
+            if response.status_code == 200:
+                results = response.json()
+                if isinstance(results, list) and len(results) > 0:
+                    result_list = results[0] if isinstance(results[0], list) else results
+                    for item in result_list:
+                        label = str(item.get("label", "")).upper()
+                        score = item.get("score", 0.5)
+                        if 'SPAM' in label or 'FAKE' in label or 'PHISH' in label:
+                            return score
+                        if 'LABEL_1' in label: # spam class for some models
+                            return score
+            return 0.5
+    except Exception as e:
+        logger.error(f"HF Text API error: {e}")
+        return 0.5
+
+
 @router.post("/text")
 async def scan_text(
     request: TextScanRequest,
@@ -67,20 +79,8 @@ async def scan_text(
     if len(text) > 10000:
         raise HTTPException(status_code=400, detail="Text too long (max 10000 chars)")
     
-    classifier = get_text_classifier()
-    
-    ml_fake_prob = 0.5
-    if classifier:
-        try:
-            result = classifier(text[:512])
-            label = result[0]['label'].upper()
-            score = result[0]['score']
-            if 'SPAM' in label or 'FAKE' in label or 'PHISH' in label:
-                ml_fake_prob = score
-            else:
-                ml_fake_prob = 1.0 - score
-        except Exception as e:
-            logger.error(f"Text classifier error: {e}")
+    # Try calling HF API
+    ml_fake_prob = await get_text_ml_score(text)
     
     # Rule-based pattern matching
     pattern_score = 0.0
@@ -93,7 +93,7 @@ async def scan_text(
     pattern_score = min(pattern_score, 0.9)
     
     # Combine ML + rule-based
-    final_score = (ml_fake_prob * 0.6 + pattern_score * 0.4)
+    final_score = (ml_fake_prob * 0.4 + pattern_score * 0.6)
     final_score = min(final_score, 1.0)
     
     if final_score >= 0.65:
@@ -108,7 +108,7 @@ async def scan_text(
     
     explanations = pattern_reasons.copy()
     if ml_fake_prob > 0.6:
-        explanations.append("NLP model detected high fraud intent probability")
+        explanations.append("Cloud NLP model detected high fraud intent probability")
     if not explanations:
         explanations.append("Text appears legitimate — no scam patterns detected")
     
