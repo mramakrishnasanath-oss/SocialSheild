@@ -36,11 +36,11 @@ async def scan_image(file: UploadFile = File(...), user_id: str = Depends(get_cu
         real_prob = 1.0 - fake_prob
         meta_info = "Mocked for Free Tier (HF API Failed/Missing Key)"
     
-    if fake_prob >= 0.75:
+    if fake_prob >= 0.60:
         verdict = VerdictLevel.FAKE
         risk = "HIGH"
-        explanations = ["High probability of AI-generated facial features", "Inconsistent lighting patterns detected"]
-    elif fake_prob >= 0.45:
+        explanations = ["High probability of AI-generated features", "Inconsistent artifacts detected"]
+    elif fake_prob >= 0.35:
         verdict = VerdictLevel.SUSPICIOUS
         risk = "MEDIUM"
         explanations = ["Some anomalous pixels found, requires manual review"]

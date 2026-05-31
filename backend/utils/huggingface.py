@@ -14,7 +14,8 @@ HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "")
 MODELS = [
     "https://api-inference.huggingface.co/models/prithivMLmods/Deep-Fake-Detector-Model",
     "https://api-inference.huggingface.co/models/dvilasuero/deepfake-detection",
-    "https://api-inference.huggingface.co/models/umm-maybe/AI-image-detector"
+    "https://api-inference.huggingface.co/models/umm-maybe/AI-image-detector",
+    "https://api-inference.huggingface.co/models/Nahrawy/AI_Generated_Image_Detection"
 ]
 
 async def call_hf_model(client: httpx.AsyncClient, url: str, headers: dict, image_bytes: bytes):
