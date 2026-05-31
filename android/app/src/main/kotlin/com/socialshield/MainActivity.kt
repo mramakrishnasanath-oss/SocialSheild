@@ -142,7 +142,7 @@ fun SocialShieldApp(isLoggedIn: Boolean) {
                     onBack = { navController.popBackStack() },
                     onResultReady = { scanId ->
                         navController.navigate(Routes.result(scanId)) {
-                            popUpTo(Routes.SCAN) { inclusive = false }
+                            popUpTo(Routes.HOME) { inclusive = false }
                         }
                     }
                 )

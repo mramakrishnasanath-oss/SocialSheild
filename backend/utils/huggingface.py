@@ -9,39 +9,62 @@ HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "")
 async def scan_image_with_hf(image_bytes: bytes) -> dict:
     """
     Calls the Hugging Face Inference API for deepfake detection.
-    Returns a dictionary with 'fake_prob' and 'real_prob'.
-    If the API fails, returns None so the router can fallback to heuristic.
+    Model: dvilasuero/deepfake-detection
+      - LABEL_0 = Real (authentic)
+      - LABEL_1 = Fake (AI-generated / deepfake)
+      - OR labels may be named 'Fake' / 'Real' directly.
+    Returns a dict with 'fake_prob' and 'real_prob', or None on failure.
     """
     if not HF_API_KEY:
         logger.warning("No HuggingFace API key found.")
         return None
 
-    # Using a public deepfake detection model on Hugging Face
     API_URL = "https://api-inference.huggingface.co/models/dvilasuero/deepfake-detection"
     headers = {"Authorization": f"Bearer {HF_API_KEY}"}
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=20.0) as client:
             response = await client.post(API_URL, headers=headers, content=image_bytes)
-            
+
             if response.status_code == 200:
                 results = response.json()
-                # Results is usually a list of dicts: [{'label': 'fake', 'score': 0.9}, {'label': 'real', 'score': 0.1}]
+                logger.info(f"HF API raw response: {results}")
+
+                # The API can return either:
+                #   [{'label': 'Fake', 'score': 0.9}, {'label': 'Real', 'score': 0.1}]
+                # OR numeric labels:
+                #   [{'label': 'LABEL_0', 'score': 0.9}, {'label': 'LABEL_1', 'score': 0.1}]
+                # For dvilasuero/deepfake-detection: LABEL_0 = Real, LABEL_1 = Fake
+
                 if isinstance(results, list) and len(results) > 0:
-                    fake_prob = 0.5
-                    real_prob = 0.5
+                    fake_prob = None
+                    real_prob = None
+
                     for item in results:
-                        label = item.get("label", "").lower()
-                        score = item.get("score", 0.5)
-                        if "fake" in label:
+                        label = str(item.get("label", "")).strip().lower()
+                        score = float(item.get("score", 0.5))
+
+                        # Named labels
+                        if label in ("fake", "ai-generated", "deepfake", "manipulated"):
                             fake_prob = score
-                        elif "real" in label:
+                        elif label in ("real", "authentic", "genuine", "natural"):
                             real_prob = score
-                    
-                    return {"fake_prob": fake_prob, "real_prob": real_prob}
-                
+                        # Numeric labels (LABEL_0 = Real, LABEL_1 = Fake for this model)
+                        elif label == "label_1":
+                            fake_prob = score
+                        elif label == "label_0":
+                            real_prob = score
+
+                    if fake_prob is not None and real_prob is not None:
+                        return {"fake_prob": fake_prob, "real_prob": real_prob}
+                    elif fake_prob is not None:
+                        return {"fake_prob": fake_prob, "real_prob": 1.0 - fake_prob}
+                    elif real_prob is not None:
+                        return {"fake_prob": 1.0 - real_prob, "real_prob": real_prob}
+
             logger.warning(f"HF API returned {response.status_code}: {response.text}")
             return None
+
     except Exception as e:
         logger.error(f"Error calling HuggingFace API: {e}")
         return None
